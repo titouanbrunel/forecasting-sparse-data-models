@@ -1,13 +1,29 @@
-import pandas as pd
-import numpy as np
 import os
 import json
+from datetime import datetime
+
+import pandas as pd
+import numpy as np
+from tqdm import tqdm
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 import xgboost as xgb
+import logging
+import matplotlib.pyplot as plt
+from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 import warnings
 warnings.filterwarnings('ignore')
+
+#& Configure logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-13s | %(message)s',
+    datefmt='%d/%m'
+)
+logger = logging.getLogger(__name__)
+
+#& load data
 
 class DataLoader:
     def __init__(self):
@@ -18,12 +34,24 @@ class DataLoader:
         self.client_data = None
         
     def load_all_data(self):
+        '''
+        Load all data sources
+        ---------------
+        Input: None
+        Output: Populates instance attributes
+        '''
         self.df_meteo = self._charger_donnees_meteo()
         self.df_events = self._charger_donnees_events()
         self.data_hebdo = self._agregation_hebdomadaire_meteo_events()
         self.familles_data = self._charger_donnees_famille('data/families_w')
         
     def load_client_data(self, client_id):
+        '''
+        Load client frequent orders
+        ---------------
+        Input: client_id (str)
+        Output: DataFrame with dates and quantities or None
+        '''
         file_path = f'data/{client_id}/frequentes.csv'
         if os.path.exists(file_path):
             df = pd.read_csv(file_path)
@@ -33,6 +61,12 @@ class DataLoader:
         return None
         
     def _charger_donnees_meteo(self):
+        '''
+        Load and engineer weather features
+        ---------------
+        Input: None
+        Output: DataFrame with daily weather metrics
+        '''
         with open('data/weather.json', 'r') as f:
             weather_data = json.load(f)
         
@@ -57,6 +91,12 @@ class DataLoader:
         return df_meteo
 
     def _charger_donnees_events(self):
+        '''
+        Load events with decay features
+        ---------------
+        Input: None
+        Output: DataFrame with daily event impacts
+        '''
         with open('data/events.json', 'r') as f:
             events_data = json.load(f)
         
@@ -108,6 +148,12 @@ class DataLoader:
         return df_events_agg
 
     def _agregation_hebdomadaire_meteo_events(self):
+        '''
+        Aggregate daily data to weekly level
+        ---------------
+        Input: None
+        Output: DataFrame with weekly features
+        '''
         df_meteo = self.df_meteo.copy()
         df_events = self.df_events.copy()
         
@@ -174,6 +220,12 @@ class DataLoader:
         return data_hebdo
 
     def _charger_donnees_famille(self, dossier_familles):
+        '''
+        Load all family-level data
+        ---------------
+        Input: dossier_familles (str)
+        Output: dict mapping family names to DataFrames
+        '''
         familles_data = {}
         
         for fichier in os.listdir(dossier_familles):
@@ -186,11 +238,19 @@ class DataLoader:
                 
         return familles_data
 
+#& Model Part
+
 class CoefficientModel:
     def __init__(self, data_loader):
         self.data_loader = data_loader
         
     def predict_global_and_coefficient(self, family_series, test_date):
+        '''
+        Predict global quantity and coefficient
+        ---------------
+        Input: family_series (pd.Series), test_date (datetime)
+        Output: (global_pred, coefficient) tuple
+        '''
         train = family_series[family_series.index < test_date]
         
         if len(train) < 52:
@@ -250,6 +310,12 @@ class CoefficientModel:
         return global_pred, coefficient
     
     def calculate_historical_coefficients_client(self, client_data, famille):
+        '''
+        Calculate historical coefficients for client-family
+        ---------------
+        Input: client_data (DataFrame), famille (str)
+        Output: dict {week_number: {year: coefficient}}
+        '''
         family_data = client_data[['date', famille]].copy()
         family_data = family_data.rename(columns={famille: 'quantity'})
         family_data['year'] = family_data['date'].dt.year
@@ -279,6 +345,12 @@ class CoefficientModel:
         return coefficients
     
     def predict_coefficient_for_2024_week(self, historical_coefficients, week_number):
+        '''
+        Predict 2024 coefficient from past years
+        ---------------
+        Input: historical_coefficients (dict), week_number (int)
+        Output: coefficient (float)
+        '''
         if week_number not in historical_coefficients:
             return 1.0
         
@@ -293,6 +365,12 @@ class CoefficientModel:
         return np.mean(coeffs_other_years)
     
     def generate_model1_coefficients(self):
+        '''
+        Generate Model 1 coefficients (global predictive)
+        ---------------
+        Input: None
+        Output: DataFrame saved to CSV
+        '''
         all_coefficients = []
         
         for family_name, family_data in self.data_loader.familles_data.items():
@@ -316,6 +394,12 @@ class CoefficientModel:
         return df_coefficients
     
     def generate_model3_coefficients(self):
+        '''
+        Generate Model 3 coefficients (historical average)
+        ---------------
+        Input: None
+        Output: CSVs saved per client
+        '''
         clients = [d for d in os.listdir('data') if d.isdigit()]
         
         for client_id in clients:
@@ -347,6 +431,12 @@ class CoefficientModel:
                 df_coefficients.to_csv(f'data/{client_id}/coef_families.csv', index=False)
     
     def _create_features(self, series):
+        '''
+        Create time series features
+        ---------------
+        Input: series (pd.Series)
+        Output: DataFrame with lag, rolling, trend features
+        '''
         df = pd.DataFrame({'val': series})
         df['week'] = series.index.isocalendar().week
         df['month'] = series.index.month
@@ -387,6 +477,12 @@ class EnhancedXGBoostHurdleModel:
         self.is_hurdle_mode = True
         
     def fit(self, X, y, feature_names=None):
+        '''
+        Fit two-stage hurdle model
+        ---------------
+        Input: X (array), y (array), feature_names (list)
+        Output: None (fits models)
+        '''
         if len(X) == 0:
             return
         self.feature_names = feature_names
@@ -410,6 +506,12 @@ class EnhancedXGBoostHurdleModel:
                 self.is_fitted = True
     
     def predict(self, X):
+        '''
+        Predict using hurdle approach
+        ---------------
+        Input: X (array)
+        Output: predictions (array)
+        '''
         if len(X) == 0:
             return np.array([0])
             
@@ -434,6 +536,12 @@ class HurdleClientModel:
         self.data_loader = data_loader
         
     def create_comprehensive_features(self, df_client):
+        '''
+        Engineer comprehensive feature set
+        ---------------
+        Input: df_client (DataFrame)
+        Output: (df_final, feature_columns) tuple
+        '''
         df_client['year'] = df_client['date'].dt.year
         df_client['week'] = df_client['date'].dt.isocalendar().week
         df_client['month'] = df_client['date'].dt.month
@@ -516,6 +624,12 @@ class HurdleClientModel:
         return df_final, feature_columns
     
     def predict_client_families(self, client_id):
+        '''
+        Generate Model 2 predictions (direct hurdle)
+        ---------------
+        Input: client_id (str)
+        Output: DataFrame saved to CSV
+        '''
         client_data = self.data_loader.load_client_data(client_id)
         if client_data is None:
             return None
@@ -566,13 +680,8 @@ class HurdleClientModel:
         return df_predictions
     
 
-import pandas as pd
-import numpy as np
-import os
-import matplotlib.pyplot as plt
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-import warnings
-warnings.filterwarnings('ignore')
+#& Results Part
+
 
 class ModelComparison:
     def __init__(self):
@@ -588,12 +697,24 @@ class ModelComparison:
         ]
         
     def load_coefficients(self):
+        '''
+        Load Model 1 coefficients
+        ---------------
+        Input: None
+        Output: Populates model1_coefficients
+        '''
         if not os.path.exists('data/families_w/coefficients.csv'):
             return
         self.model1_coefficients = pd.read_csv('data/families_w/coefficients.csv')
         self.model1_coefficients['date'] = pd.to_datetime(self.model1_coefficients['date'])
         
     def load_client_coefficients(self, client_id):
+        '''
+        Load Model 3 client coefficients
+        ---------------
+        Input: client_id (str)
+        Output: DataFrame or None
+        '''
         file_path = f'data/{client_id}/coef_families.csv'
         if os.path.exists(file_path):
             df = pd.read_csv(file_path)
@@ -603,6 +724,12 @@ class ModelComparison:
         return None
         
     def load_client_data(self, client_id):
+        '''
+        Load client order history
+        ---------------
+        Input: client_id (str)
+        Output: DataFrame or None
+        '''
         file_path = f'data/{client_id}/frequentes.csv'
         if os.path.exists(file_path):
             df = pd.read_csv(file_path)
@@ -611,6 +738,12 @@ class ModelComparison:
         return None
         
     def load_client_predictions(self, client_id):
+        '''
+        Load Model 2 predictions
+        ---------------
+        Input: client_id (str)
+        Output: DataFrame or None
+        '''
         file_path = f'data/{client_id}/predictions.csv'
         if not os.path.exists(file_path):
             return None
@@ -625,6 +758,12 @@ class ModelComparison:
             return None
     
     def calculate_rolling_predictions(self, client_data, famille, coefficients, model_name):
+        '''
+        Apply coefficients to rolling mean
+        ---------------
+        Input: client_data (DataFrame), famille (str), coefficients (DataFrame), model_name (str)
+        Output: DataFrame with predictions
+        '''
         family_data = client_data[['date', famille]].copy()
         family_data = family_data.rename(columns={famille: 'quantity'})
         family_data = family_data[family_data['date'] < '2024-01-01']
@@ -662,6 +801,12 @@ class ModelComparison:
         return pd.DataFrame(predictions)
     
     def get_real_values(self, client_data, famille):
+        '''
+        Extract 2024 actual values
+        ---------------
+        Input: client_data (DataFrame), famille (str)
+        Output: DataFrame with real values
+        '''
         family_data = client_data[['date', famille]].copy()
         family_data = family_data.rename(columns={famille: 'quantity'})
         family_data_2024 = family_data[family_data['date'].dt.year == 2024]
@@ -691,6 +836,12 @@ class ModelComparison:
         return pd.DataFrame(real_values)
     
     def plot_available_models(self, results, client_id, nom_famille, available_models):
+        '''
+        Plot comparison of models vs actual
+        ---------------
+        Input: results (dict), client_id (str), nom_famille (str), available_models (list)
+        Output: filename of saved plot
+        '''
         fig, ax = plt.subplots(1, 1, figsize=(16, 8))
         
         x = range(len(results['dates']))
@@ -735,6 +886,12 @@ class ModelComparison:
     
 
     def generate_comparison_for_client(self, client_id):
+        '''
+        Generate comparison plots for client
+        ---------------
+        Input: client_id (str)
+        Output: None (saves plots)
+        '''
         client_data = self.load_client_data(client_id)
         client_predictions = self.load_client_predictions(client_id)
         client_coefficients = self.load_client_coefficients(client_id)
@@ -810,6 +967,12 @@ class ModelComparison:
                 
     
     def run_comparison_for_all_clients(self):
+        '''
+        Generate plots for all clients
+        ---------------
+        Input: None
+        Output: None (saves plots)
+        '''
         self.load_coefficients()
         
         clients = [d for d in os.listdir('data') if d.isdigit()]
@@ -817,32 +980,35 @@ class ModelComparison:
         for client_id in clients:
             self.generate_comparison_for_client(client_id)
 
-from tqdm import tqdm
 
 def main():
-    #! models part
+    '''
+    Main execution
+    ---------------
+    Input: None
+    Output: None (runs full pipeline)
+    '''
     data_loader = DataLoader()
     data_loader.load_all_data()
-    print ('data loaded')
-    '''
-    #?coeff_model = CoefficientModel(data_loader)
+    logger.info('data loaded')
+    
+    coeff_model = CoefficientModel(data_loader)
     hurdle_model = HurdleClientModel(data_loader)
     
-    #?coeff_model.generate_model1_coefficients()
-    #?coeff_model.generate_model3_coefficients()
+    coeff_model.generate_model1_coefficients()
+    coeff_model.generate_model3_coefficients()
     
     clients = [d for d in os.listdir('data') if d.isdigit()]
-    print('coefficient models : done')
+    logger.info('coefficient models done')
     
     for client_id in tqdm(clients):
         predictions_file = f'data/{client_id}/predictions.csv'
         if os.path.exists(predictions_file):
             continue
-        #! hurdle_model.predict_client_families(client_id)
-    '''
-    print('all done')
+        hurdle_model.predict_client_families(client_id)
+    
+    logger.info('all done')
 
-    #! graphs part
     comparison = ModelComparison()
     comparison.run_comparison_for_all_clients()
 

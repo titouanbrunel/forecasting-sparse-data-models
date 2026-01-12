@@ -4,7 +4,20 @@ import os
 import matplotlib.pyplot as plt
 import warnings
 from tqdm import tqdm
+import logging
+from datetime import datetime
+
 warnings.filterwarnings('ignore')
+
+#& Configure logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-13s | %(message)s',
+    datefmt='%d/%m'
+)
+logger = logging.getLogger(__name__)
+
+#& Model
 
 class CrostonModel:
     def __init__(self, alpha=0.1):
@@ -13,6 +26,12 @@ class CrostonModel:
         self.interval_forecast = None
         
     def fit(self, series):
+        '''
+        Fit Croston model on intermittent demand
+        ---------------
+        Input: series (array-like)
+        Output: None (fits model parameters)
+        '''
         non_zero_demands = []
         intervals = []
         
@@ -50,15 +69,29 @@ class CrostonModel:
         self.interval_forecast = max(interval_forecast, 1)
     
     def predict(self):
+        '''
+        Predict demand using Croston formula
+        ---------------
+        Input: None
+        Output: predicted demand (float)
+        '''
         if self.demand_forecast is None or self.interval_forecast is None:
             return 0
         return self.demand_forecast / self.interval_forecast
+
+#& load data
 
 class RareFamiliesModel:
     def __init__(self):
         pass
     
     def load_client_rares_data(self, client_id):
+        '''
+        Load rare families data for client
+        ---------------
+        Input: client_id (str)
+        Output: DataFrame or None
+        '''
         file_path = f'data/{client_id}/rares.csv'
         if os.path.exists(file_path):
             df = pd.read_csv(file_path)
@@ -67,6 +100,12 @@ class RareFamiliesModel:
         return None
     
     def predict_same_week_last_year(self, client_data, famille, test_date):
+        '''
+        Predict using same week from previous year
+        ---------------
+        Input: client_data (DataFrame), famille (str), test_date (datetime)
+        Output: prediction (float)
+        '''
         family_data = client_data[['date', famille]].copy()
         family_data = family_data.rename(columns={famille: 'quantity'})
         
@@ -99,6 +138,12 @@ class RareFamiliesModel:
                 return 0
     
     def predict_croston(self, client_data, famille, test_date):
+        '''
+        Predict using Croston method
+        ---------------
+        Input: client_data (DataFrame), famille (str), test_date (datetime)
+        Output: prediction (float)
+        '''
         family_data = client_data[['date', famille]].copy()
         family_data = family_data.rename(columns={famille: 'quantity'})
         
@@ -113,6 +158,12 @@ class RareFamiliesModel:
         return croston.predict()
     
     def predict_rare_families_for_client(self, client_id):
+        '''
+        Generate predictions for all rare families
+        ---------------
+        Input: client_id (str)
+        Output: DataFrame saved to CSV
+        '''
         client_data = self.load_client_rares_data(client_id)
         if client_data is None:
             return None
@@ -141,16 +192,32 @@ class RareFamiliesModel:
         return df_predictions
     
     def run_for_all_clients(self):
+        '''
+        Run predictions for all clients
+        ---------------
+        Input: None
+        Output: None (saves predictions per client)
+        '''
         clients = [d for d in os.listdir('data') if d.isdigit()]
         
-        for client_id in tqdm(clients):
+        logger.info(f'Starting rare families predictions for {len(clients)} clients')
+        for client_id in tqdm(clients, desc='Processing clients'):
             self.predict_rare_families_for_client(client_id)
+        logger.info('Rare families predictions completed')
+
+#& Results Part
 
 class RareModelComparison:
     def __init__(self):
         pass
     
     def load_client_rares_data(self, client_id):
+        '''
+        Load rare families data
+        ---------------
+        Input: client_id (str)
+        Output: DataFrame or None
+        '''
         file_path = f'data/{client_id}/rares.csv'
         if os.path.exists(file_path):
             df = pd.read_csv(file_path)
@@ -159,6 +226,12 @@ class RareModelComparison:
         return None
     
     def load_client_rare_predictions(self, client_id):
+        '''
+        Load rare families predictions
+        ---------------
+        Input: client_id (str)
+        Output: DataFrame or None
+        '''
         file_path = f'data/{client_id}/predictions_rares.csv'
         if not os.path.exists(file_path):
             return None
@@ -172,6 +245,12 @@ class RareModelComparison:
             return None
     
     def get_real_values_rare(self, client_data, famille):
+        '''
+        Extract 2024 actual values for rare family
+        ---------------
+        Input: client_data (DataFrame), famille (str)
+        Output: DataFrame with real values
+        '''
         family_data = client_data[['date', famille]].copy()
         family_data = family_data.rename(columns={famille: 'quantity'})
         family_data_2024 = family_data[family_data['date'].dt.year == 2024]
@@ -199,9 +278,21 @@ class RareModelComparison:
     
 
     def clean_filename(self, nom_famille):
+        '''
+        Clean family name for valid filename
+        ---------------
+        Input: nom_famille (str)
+        Output: cleaned filename (str)
+        '''
         return nom_famille.replace("/", "_").replace("\\", "_").replace(":", "_").replace("*", "_").replace("?", "_").replace('"', "_").replace("<", "_").replace(">", "_").replace("|", "_")
 
     def plot_rare_models_comparison(self, results, client_id, nom_famille):
+        '''
+        Plot comparison of rare family models
+        ---------------
+        Input: results (dict), client_id (str), nom_famille (str)
+        Output: filename of saved plot
+        '''
         fig, ax = plt.subplots(1, 1, figsize=(16, 8))
         
         x = range(len(results['dates']))
@@ -241,6 +332,12 @@ class RareModelComparison:
         return filename
         
     def generate_comparison_for_client(self, client_id):
+        '''
+        Generate comparison plots for client
+        ---------------
+        Input: client_id (str)
+        Output: list of result dicts
+        '''
         client_data = self.load_client_rares_data(client_id)
         client_predictions = self.load_client_rare_predictions(client_id)
         
@@ -294,21 +391,39 @@ class RareModelComparison:
         return results_summary
     
     def run_comparison_for_all_clients(self):
+        '''
+        Generate comparison plots for all clients
+        ---------------
+        Input: None
+        Output: None (saves plots)
+        '''
         clients = [d for d in os.listdir('data') if d.isdigit()]
         all_results = []
         
+        logger.info(f'Starting rare families comparison plots for {len(clients)} clients')
         for client_id in clients:
             client_results = self.generate_comparison_for_client(client_id)
             if client_results:
                 all_results.extend(client_results)
+        logger.info(f'Comparison plots completed: {len(all_results)} plots generated')
         
 
 def main():
+    '''
+    Main execution for rare families
+    ---------------
+    Input: None
+    Output: None (runs full pipeline)
+    '''
+    logger.info('Starting rare families pipeline')
+    
     rare_model = RareFamiliesModel()
     rare_model.run_for_all_clients()
     
     comparison = RareModelComparison()
     comparison.run_comparison_for_all_clients()
+    
+    logger.info('Rare families pipeline completed')
 
 if __name__ == "__main__":
     main()
